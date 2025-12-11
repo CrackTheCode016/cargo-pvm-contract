@@ -1,5 +1,7 @@
 [package]
 name = "cargo-pvm-contract"
+description = "A Cargo subcommand to create and build PVM smart contracts."
+repository = "https://github.com/paritytech/cargo-pvm-contract"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -11,7 +13,6 @@ include = [
     "Cargo.lock",
     "README.md",
 ]
-exclude = [".git", "target"]
 
 [[bin]]
 name = "cargo-pvm-contract"
