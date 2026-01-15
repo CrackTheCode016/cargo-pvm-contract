@@ -24,14 +24,7 @@ This launches an interactive prompt to initialize a new contract project.
 
 Examples:
 
-Initialize a new project and build it:
-
-```bash
-cargo pvm-contract
-cd my_contract
-cargo build
-```
-
-The PolkaVM bytecode will be written to `target/pvm/<bin>.polkavm` via the generated `build.rs`.
+Initialize a new project with `cargo pvm-contract` and build it with `cargo build`:
+The PolkaVM bytecode will be written to `target/<bin>.<profile>.polkavm`.
 
 

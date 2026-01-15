@@ -5,9 +5,7 @@
 //! ## Usage in `build.rs`
 //!
 //! ```no_run
-//! fn main() {
-//!     cargo_pvm_contract_builder::PvmBuilder::new().build();
-//! }
+//! cargo_pvm_contract_builder::PvmBuilder::new().build();
 //! ```
 
 use anyhow::{Context, Result};
@@ -24,8 +22,14 @@ const INTERNAL_BUILD_ENV: &str = "CARGO_PVM_CONTRACT_INTERNAL";
 pub struct PvmBuilder {
     /// The path to the `Cargo.toml` of the project that should be built.
     project_cargo_toml: PathBuf,
-    /// Specific binary to build (None = all binaries).
-    bin_name: Option<String>,
+    /// Specific binaries to build (None = all binaries).
+    bin_names: Option<Vec<String>>,
+}
+
+impl Default for PvmBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PvmBuilder {
@@ -33,13 +37,23 @@ impl PvmBuilder {
     pub fn new() -> Self {
         Self {
             project_cargo_toml: get_manifest_dir().join("Cargo.toml"),
-            bin_name: None,
+            bin_names: None,
         }
     }
 
     /// Build only the specified binary.
     pub fn with_bin(mut self, name: impl Into<String>) -> Self {
-        self.bin_name = Some(name.into());
+        self.bin_names = Some(vec![name.into()]);
+        self
+    }
+
+    /// Build only the specified binaries.
+    pub fn with_bins<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.bin_names = Some(names.into_iter().map(Into::into).collect());
         self
     }
 
@@ -50,7 +64,7 @@ impl PvmBuilder {
             return;
         }
 
-        if let Err(e) = build_project(&self.project_cargo_toml, self.bin_name) {
+        if let Err(e) = build_project(&self.project_cargo_toml, self.bin_names) {
             eprintln!("PolkaVM build failed: {e}");
             std::process::exit(1);
         }
@@ -66,45 +80,45 @@ fn get_manifest_dir() -> PathBuf {
 
 /// Detect the build profile from the environment.
 #[derive(Clone, Debug)]
-enum Profile {
-    Debug,
-    Release,
+struct Profile {
+    name: String,
 }
 
 impl Profile {
     fn detect() -> Self {
-        match env::var("PROFILE").as_deref() {
-            Ok("release") => Profile::Release,
-            _ => Profile::Debug,
+        let name = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+        Self { name }
+    }
+
+    fn cargo_arg(&self) -> &str {
+        if self.name == "debug" {
+            "dev"
+        } else {
+            self.name.as_str()
         }
     }
 
-    fn cargo_arg(&self) -> &'static str {
-        match self {
-            Profile::Debug => "dev",
-            Profile::Release => "release",
-        }
-    }
-
-    fn directory(&self) -> &'static str {
-        match self {
-            Profile::Debug => "debug",
-            Profile::Release => "release",
-        }
+    fn directory(&self) -> &str {
+        self.name.as_str()
     }
 }
 
-/// Get the build output directory.
-fn get_build_dir() -> PathBuf {
+/// Get the workspace target directory.
+fn get_target_root() -> PathBuf {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set"));
 
     for ancestor in out_dir.ancestors() {
         if ancestor.file_name().map(|n| n == "target").unwrap_or(false) {
-            return ancestor.join("pvmbuild");
+            return ancestor.to_path_buf();
         }
     }
 
-    out_dir.join("pvmbuild")
+    out_dir
+}
+
+/// Get the build output directory.
+fn get_build_dir() -> PathBuf {
+    get_target_root().join("pvmbuild")
 }
 
 /// Get the list of binary targets from Cargo.toml.
@@ -137,31 +151,14 @@ fn get_bin_targets(cargo_toml: &Path) -> Result<Vec<String>> {
     Ok(bins)
 }
 
-/// Get the crate name from Cargo.toml
-fn get_crate_name(cargo_toml: &Path) -> Result<String> {
-    let content = fs::read_to_string(cargo_toml)
-        .with_context(|| format!("Failed to read {}", cargo_toml.display()))?;
-
-    let doc: toml_edit::DocumentMut = content.parse().context("Failed to parse Cargo.toml")?;
-
-    doc.get("package")
-        .and_then(|p| p.get("name"))
-        .and_then(|n| n.as_str())
-        .map(|s| s.to_string())
-        .context("No package name found in Cargo.toml")
-}
-
 /// Build the project.
-fn build_project(project_cargo_toml: &Path, bin_name: Option<String>) -> Result<()> {
+fn build_project(project_cargo_toml: &Path, bin_names: Option<Vec<String>>) -> Result<()> {
     let profile = Profile::detect();
     let build_dir = get_build_dir();
-    let crate_name = get_crate_name(project_cargo_toml)?;
+    let target_root = get_target_root();
 
-    let project_dir = build_dir.join(&crate_name);
-    fs::create_dir_all(&project_dir)?;
-
-    let bins_to_build = match bin_name {
-        Some(name) => vec![name],
+    let bins_to_build = match bin_names {
+        Some(names) => names,
         None => get_bin_targets(project_cargo_toml)?,
     };
 
@@ -169,7 +166,7 @@ fn build_project(project_cargo_toml: &Path, bin_name: Option<String>) -> Result<
         anyhow::bail!("No binary targets found in Cargo.toml");
     }
 
-    let target_dir = project_dir.join("target");
+    let target_dir = build_dir;
     build_elf(project_cargo_toml, &target_dir, &profile, &bins_to_build)?;
 
     // Link each ELF to PolkaVM
@@ -183,7 +180,7 @@ fn build_project(project_cargo_toml: &Path, bin_name: Option<String>) -> Result<
             anyhow::bail!("ELF binary not found at: {}", elf_path.display());
         }
 
-        let output_path = project_dir.join(format!("{}.polkavm", bin));
+        let output_path = target_root.join(format!("{}.{}.polkavm", bin, profile.directory()));
         link_to_polkavm(&elf_path, &output_path)?;
     }
 
@@ -241,13 +238,13 @@ fn build_elf(
         cmd.arg("--bin").arg(bin);
     }
 
-    eprintln!("Building PolkaVM binary with profile: {:?}", profile);
+    eprintln!("Building PolkaVM binary with profile: {profile:?}");
 
     let output = cmd.output().context("Failed to execute cargo build")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Cargo build failed:\n{}", stderr);
+        anyhow::bail!("Cargo build failed:\n{stderr}");
     }
 
     Ok(())
@@ -298,8 +295,12 @@ fn link_to_polkavm(elf_path: &Path, output_path: &Path) -> Result<()> {
     )
     .map_err(|e| anyhow::anyhow!("Failed to link PolkaVM program: {e}"))?;
 
-    fs::write(output_path, &linked)
-        .with_context(|| format!("Failed to write PolkaVM bytecode to {}", output_path.display()))?;
+    fs::write(output_path, &linked).with_context(|| {
+        format!(
+            "Failed to write PolkaVM bytecode to {}",
+            output_path.display()
+        )
+    })?;
 
     eprintln!(
         "Created PolkaVM binary: {} ({} bytes)",

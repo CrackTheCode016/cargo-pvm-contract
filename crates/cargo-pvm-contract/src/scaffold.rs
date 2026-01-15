@@ -34,6 +34,7 @@ struct CargoTomlTemplate<'a> {
     contract_name: &'a str,
     use_alloc: bool,
     builder_version: &'a str,
+    builder_path: Option<String>,
 }
 
 #[derive(Template)]
@@ -229,7 +230,10 @@ fn to_screaming_snake_case(s: &str) -> String {
 // Public API
 // ============================================================================
 
-pub fn init_blank_contract(contract_name: &str) -> Result<()> {
+pub fn init_blank_contract(
+    contract_name: &str,
+    builder_path: Option<&std::path::Path>,
+) -> Result<()> {
     let target_dir = std::env::current_dir()?.join(contract_name);
     if target_dir.exists() {
         anyhow::bail!("Directory already exists: {target_dir:?}");
@@ -256,7 +260,7 @@ target = "riscv64imac-unknown-none-elf"
     let build_rs_content = generate_build_rs()?;
     fs::write(target_dir.join("build.rs"), build_rs_content)?;
 
-    let cargo_toml_content = generate_cargo_toml(contract_name, false)?;
+    let cargo_toml_content = generate_cargo_toml(contract_name, false, builder_path)?;
     fs::write(target_dir.join("Cargo.toml"), cargo_toml_content)?;
 
     println!("Successfully initialized blank contract project: {target_dir:?}");
@@ -266,7 +270,12 @@ target = "riscv64imac-unknown-none-elf"
     Ok(())
 }
 
-pub fn init_from_solidity_file(sol_file: &str, contract_name: &str, use_alloc: bool) -> Result<()> {
+pub fn init_from_solidity_file(
+    sol_file: &str,
+    contract_name: &str,
+    use_alloc: bool,
+    builder_path: Option<&std::path::Path>,
+) -> Result<()> {
     let sol_path = PathBuf::from(sol_file);
     if !sol_path.exists() {
         anyhow::bail!("Solidity file not found: {sol_file}");
@@ -325,7 +334,7 @@ target = "riscv64imac-unknown-none-elf"
     fs::write(target_dir.join("build.rs"), build_rs_content)?;
 
     // Create Cargo.toml
-    let cargo_toml_content = generate_cargo_toml(contract_name, use_alloc)?;
+    let cargo_toml_content = generate_cargo_toml(contract_name, use_alloc, builder_path)?;
     fs::write(target_dir.join("Cargo.toml"), cargo_toml_content)?;
 
     println!("Successfully initialized contract project from {sol_file}: {target_dir:?}");
@@ -582,11 +591,16 @@ fn generate_rust_code_no_alloc(metadata: &ContractMetadata, contract_name: &str)
         .context("Failed to render no-alloc template")
 }
 
-fn generate_cargo_toml(contract_name: &str, use_alloc: bool) -> Result<String> {
+fn generate_cargo_toml(
+    contract_name: &str,
+    use_alloc: bool,
+    builder_path: Option<&std::path::Path>,
+) -> Result<String> {
     let template = CargoTomlTemplate {
         contract_name,
         use_alloc,
         builder_version: BUILDER_VERSION,
+        builder_path: builder_path.map(|path| path.display().to_string()),
     };
     template
         .render()
