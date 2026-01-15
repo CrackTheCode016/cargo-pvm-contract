@@ -1,0 +1,30 @@
+[package]
+name = "{{ contract_name }}"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[[bin]]
+name = "{{ contract_name }}"
+path = "src/lib.rs"
+
+[dependencies]
+{% if use_alloc %}
+alloy-core = { version = "0.8", default-features = false, features = ["sol-types"] }
+{% endif %}
+pallet-revive-uapi = { version = "0.10", default-features = false }
+{% if use_alloc %}
+picoalloc = { version = "5", default-features = false }
+{% endif %}
+polkavm-derive = { version = "0.30.0" }
+
+[build-dependencies]
+cargo-pvm-contract-builder = "{{ builder_version }}"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true
+overflow-checks = false
