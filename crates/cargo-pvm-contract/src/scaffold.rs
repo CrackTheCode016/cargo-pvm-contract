@@ -267,11 +267,7 @@ target = "riscv64imac-unknown-none-elf"
     Ok(())
 }
 
-pub fn init_from_solidity_file(
-    sol_file: &str,
-    contract_name: &str,
-    use_alloc: bool,
-) -> Result<()> {
+pub fn init_from_solidity_file(sol_file: &str, contract_name: &str, use_alloc: bool) -> Result<()> {
     let sol_path = PathBuf::from(sol_file);
     if !sol_path.exists() {
         anyhow::bail!("Solidity file not found: {sol_file}");
