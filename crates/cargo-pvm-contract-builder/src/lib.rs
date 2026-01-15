@@ -229,7 +229,7 @@ fn build_elf(
         .arg(&target_json)
         .arg("-Zbuild-std=core,alloc");
 
-    if immediate_abort {
+    if !immediate_abort {
         cmd.arg("-Zbuild-std-features=panic_immediate_abort");
     }
 
