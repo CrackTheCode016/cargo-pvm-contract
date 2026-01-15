@@ -138,14 +138,13 @@ fn get_bin_targets(cargo_toml: &Path) -> Result<Vec<String>> {
         }
     }
 
-    if bins.is_empty() {
-        if let Some(name) = doc
+    if bins.is_empty()
+        && let Some(name) = doc
             .get("package")
             .and_then(|p| p.get("name"))
             .and_then(|n| n.as_str())
-        {
-            bins.push(name.to_string());
-        }
+    {
+        bins.push(name.to_string());
     }
 
     Ok(bins)

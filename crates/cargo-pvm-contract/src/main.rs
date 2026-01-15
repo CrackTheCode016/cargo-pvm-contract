@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use inquire::{Select, Text};
 use log::debug;
 use std::{fs, path::PathBuf};
@@ -115,10 +115,10 @@ fn init_command(args: PvmContractArgs) -> Result<()> {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from);
 
-    if let Some(path) = builder_path.as_deref() {
-        if !path.exists() {
-            anyhow::bail!("Builder path does not exist: {}", path.display());
-        }
+    if let Some(path) = builder_path.as_deref()
+        && !path.exists()
+    {
+        anyhow::bail!("Builder path does not exist: {}", path.display());
     }
 
     if args.non_interactive {
@@ -338,7 +338,11 @@ fn init_from_example(
         .duration_since(std::time::UNIX_EPOCH)
         .context("Failed to read system time")?
         .as_nanos();
-    let temp_sol_path = temp_dir.join(format!("{timestamp}-{}", example.sol_filename()));
+    let example_temp_dir = temp_dir.join(format!("cargo-pvm-contract-{timestamp}"));
+    fs::create_dir_all(&example_temp_dir).with_context(|| {
+        format!("Failed to create temporary directory for example: {example_temp_dir:?}",)
+    })?;
+    let temp_sol_path = example_temp_dir.join(example.sol_filename());
     fs::write(&temp_sol_path, example_file.contents())
         .with_context(|| format!("Failed to write temporary .sol file: {:?}", temp_sol_path))?;
 
@@ -353,7 +357,7 @@ fn init_from_example(
     );
 
     // Clean up temp file
-    let _ = fs::remove_file(&temp_sol_path);
+    let _ = fs::remove_dir_all(&example_temp_dir);
 
     result
 }
