@@ -1,0 +1,119 @@
+#![no_main]
+#![no_std]
+
+use pallet_revive_uapi::{HostFn, HostFnImpl as api, ReturnFlags, StorageFlags};
+
+// ============================================================================
+// {{ contract_name_upper }} CONTRACT - Generated from Solidity ABI
+// ============================================================================
+
+// Function selectors
+{% for sel in selectors %}
+const {{ sel.const_name }}: [u8; 4] = [{{ sel.bytes_hex }}]; // {{ sel.signature }}
+{% endfor %}
+
+// Event signatures
+{% for evt in events %}
+const {{ evt.const_name }}: [u8; 32] = [
+    {{ evt.bytes_hex }}
+]; // {{ evt.signature }}
+
+{% endfor %}
+// Error selectors
+{% for err in errors %}
+const {{ err.const_name }}: [u8; 4] = [{{ err.bytes_hex }}]; // {{ err.signature }}
+{% endfor %}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    // Safety: The unimp instruction is guaranteed to trap
+    unsafe {
+        core::arch::asm!("unimp");
+        core::hint::unreachable_unchecked();
+    }
+}
+
+// ============================================================================
+// ABI Decoding Helpers
+// ============================================================================
+
+/// Decode address from ABI-encoded data (32 bytes, address is in the last 20 bytes)
+#[inline]
+fn decode_address(data: &[u8]) -> [u8; 20] {
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&data[12..32]);
+    addr
+}
+
+/// Decode u128 from ABI-encoded data (32 bytes, takes lower 16 bytes)
+#[inline]
+fn decode_u128(data: &[u8]) -> u128 {
+    u128::from_be_bytes(data[16..32].try_into().unwrap())
+}
+
+/// Convert u128 to 32-byte word (big-endian, left-padded)
+#[inline]
+fn to_word(v: u128) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[16..].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
+// ============================================================================
+// Storage Helpers
+// ============================================================================
+
+/// Get the caller's address
+#[inline]
+fn get_caller() -> [u8; 20] {
+    let mut caller = [0u8; 20];
+    api::caller(&mut caller);
+    caller
+}
+
+// ============================================================================
+// Contract Entry Points
+// ============================================================================
+
+/// This is the constructor which is called once per contract.
+#[no_mangle]
+#[polkavm_derive::polkavm_export]
+pub extern "C" fn deploy() {}
+
+/// This is the regular entry point when the contract is called.
+#[no_mangle]
+#[polkavm_derive::polkavm_export]
+pub extern "C" fn call() {
+    let call_data_len = api::call_data_size() as usize;
+
+    // Fixed buffer for call data
+    let mut call_data = [0u8; 256];
+    if call_data_len > call_data.len() {
+        panic!("Call data too large");
+    }
+
+    api::call_data_copy(&mut call_data[..call_data_len], 0);
+
+    if call_data_len < 4 {
+        panic!("Call data too short");
+    }
+
+    let selector: [u8; 4] = call_data[0..4].try_into().unwrap();
+
+    match selector {
+{% for func in functions %}
+        {{ func.selector_const }} => {
+            if call_data_len < {{ func.min_call_data_len }} {
+                panic!("Invalid {{ func.name }} call data");
+            }
+{% for param in func.params %}
+            {{ param.decode_line }}
+{% endfor %}
+
+            // TODO: Implement {{ func.name }} logic
+            todo!()
+        }
+{% endfor %}
+        _ => panic!("Unknown function selector"),
+    }
+}

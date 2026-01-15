@@ -1,0 +1,34 @@
+[package]
+name = "cargo-pvm-contract"
+description = "A Cargo subcommand to create and build PVM smart contracts."
+repository.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = true
+include = [
+    "src/**",
+    "templates/**",
+    "Cargo.toml",
+]
+
+[[bin]]
+name = "cargo-pvm-contract"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+include_dir = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+inquire = { workspace = true }
+tiny-keccak = { workspace = true }
+askama = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.10"
