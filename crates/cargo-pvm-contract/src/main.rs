@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use include_dir::{include_dir, Dir};
 use inquire::{Select, Text};
 use log::debug;
@@ -10,10 +10,18 @@ mod scaffold;
 // Embed the templates directory into the binary
 static TEMPLATES_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates");
 
-/// Initialize contract projects for PolkaVM
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct PvmContractArgs;
+#[command(name = "cargo", bin_name = "cargo", author, version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Initialize contract projects for PolkaVM
+    PvmContract,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InitType {
@@ -79,8 +87,10 @@ impl ExampleChoice {
 fn main() -> Result<()> {
     env_logger::init();
 
-    PvmContractArgs::parse();
-    init_command()
+    let Cli { command } = Cli::parse();
+    match command {
+        Commands::PvmContract => init_command(),
+    }
 }
 
 fn init_command() -> Result<()> {
