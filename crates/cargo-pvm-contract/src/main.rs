@@ -3,7 +3,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use include_dir::{Dir, include_dir};
 use inquire::{Select, Text};
 use log::debug;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 mod scaffold;
 
@@ -27,8 +30,8 @@ enum Commands {
 struct PvmContractArgs {
     #[arg(long, value_enum, requires = "non_interactive")]
     init_type: Option<InitType>,
-    #[arg(long, value_enum, requires = "non_interactive")]
-    example: Option<ExampleChoice>,
+    #[arg(long, requires = "non_interactive")]
+    example: Option<String>,
     #[arg(long, value_enum, requires = "non_interactive")]
     memory_model: Option<MemoryModel>,
     #[arg(long, requires = "non_interactive")]
@@ -73,31 +76,61 @@ impl std::fmt::Display for MemoryModel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
-enum ExampleChoice {
-    MyToken,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExampleContract {
+    name: String,
+    filename: String,
 }
 
-impl std::fmt::Display for ExampleChoice {
+impl ExampleContract {
+    fn from_path(path: &Path) -> Option<Self> {
+        if path.extension().and_then(|ext| ext.to_str()) != Some("sol") {
+            return None;
+        }
+
+        let filename = path.file_name()?.to_str()?.to_string();
+        let name = path.file_stem()?.to_str()?.to_string();
+        Some(Self { name, filename })
+    }
+
+    fn matches(&self, query: &str) -> bool {
+        let query = query.trim().to_ascii_lowercase();
+        let name = self.name.to_ascii_lowercase();
+        let filename = self.filename.to_ascii_lowercase();
+        query == name || query == filename
+    }
+}
+
+impl std::fmt::Display for ExampleContract {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExampleChoice::MyToken => write!(f, "MyToken (ERC20-like token)"),
-        }
+        write!(f, "{}", self.name)
     }
 }
 
-impl ExampleChoice {
-    fn sol_filename(&self) -> &'static str {
-        match self {
-            ExampleChoice::MyToken => "MyToken.sol",
-        }
+fn load_examples() -> Result<Vec<ExampleContract>> {
+    let examples_dir = TEMPLATES_DIR
+        .get_dir("examples")
+        .ok_or_else(|| anyhow::anyhow!("Examples directory not found in templates"))?;
+    let mut examples: Vec<ExampleContract> = examples_dir
+        .files()
+        .filter_map(|file| ExampleContract::from_path(file.path()))
+        .collect();
+
+    examples.sort_by(|left, right| left.name.cmp(&right.name));
+
+    if examples.is_empty() {
+        anyhow::bail!("No example contracts found in templates/examples");
     }
 
-    fn default_name(&self) -> &'static str {
-        match self {
-            ExampleChoice::MyToken => "MyToken",
-        }
-    }
+    Ok(examples)
+}
+
+fn find_example(examples: &[ExampleContract], query: &str) -> Result<ExampleContract> {
+    examples
+        .iter()
+        .find(|example| example.matches(query))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Unknown example: {query}"))
 }
 
 fn main() -> Result<()> {
@@ -152,8 +185,7 @@ fn init_command_interactive(builder_path: Option<&std::path::Path>) -> Result<()
             scaffold::init_blank_contract(&contract_name, builder_path)
         }
         InitType::Example => {
-            // Prompt for example choice
-            let examples = vec![ExampleChoice::MyToken];
+            let examples = load_examples()?;
             let example = Select::new("Select an example:", examples)
                 .prompt()
                 .context("Failed to get example choice")?;
@@ -166,7 +198,7 @@ fn init_command_interactive(builder_path: Option<&std::path::Path>) -> Result<()
 
             // Ask for name with example name as default
             let contract_name = Text::new("What is your contract name?")
-                .with_default(example.default_name())
+                .with_default(&example.name)
                 .with_help_message("This will be the name of the project directory")
                 .prompt()
                 .context("Failed to get contract name")?;
@@ -178,11 +210,10 @@ fn init_command_interactive(builder_path: Option<&std::path::Path>) -> Result<()
             check_dir_exists(&contract_name)?;
             debug!(
                 "Initializing from example: {} with memory model: {:?}",
-                example.sol_filename(),
-                memory_model
+                example.filename, memory_model
             );
 
-            init_from_example(example, &contract_name, memory_model, builder_path)
+            init_from_example(&example, &contract_name, memory_model, builder_path)
         }
         InitType::SolidityFile => {
             // Prompt for .sol file path
@@ -257,15 +288,15 @@ fn init_command_non_interactive(
             scaffold::init_blank_contract(&contract_name, builder_path)
         }
         InitType::Example => {
-            let example = args.example.ok_or_else(|| {
+            let examples = load_examples()?;
+            let example_name = args.example.ok_or_else(|| {
                 anyhow::anyhow!("--example is required for example initialization")
             })?;
+            let example = find_example(&examples, &example_name)?;
             let memory_model = args.memory_model.ok_or_else(|| {
                 anyhow::anyhow!("--memory-model is required for example initialization")
             })?;
-            let contract_name = args
-                .name
-                .unwrap_or_else(|| example.default_name().to_string());
+            let contract_name = args.name.unwrap_or_else(|| example.name.clone());
 
             if contract_name.is_empty() {
                 anyhow::bail!("Contract name cannot be empty");
@@ -274,11 +305,10 @@ fn init_command_non_interactive(
             check_dir_exists(&contract_name)?;
             debug!(
                 "Initializing from example: {} with memory model: {:?}",
-                example.sol_filename(),
-                memory_model
+                example.filename, memory_model
             );
 
-            init_from_example(example, &contract_name, memory_model, builder_path)
+            init_from_example(&example, &contract_name, memory_model, builder_path)
         }
         InitType::SolidityFile => {
             let sol_path = args.sol_file.ok_or_else(|| {
@@ -321,13 +351,13 @@ fn init_command_non_interactive(
 }
 
 fn init_from_example(
-    example: ExampleChoice,
+    example: &ExampleContract,
     contract_name: &str,
     memory_model: MemoryModel,
     builder_path: Option<&std::path::Path>,
 ) -> Result<()> {
     // Get the embedded example .sol file
-    let example_path = format!("examples/{}", example.sol_filename());
+    let example_path = format!("examples/{}", example.filename);
     let example_file = TEMPLATES_DIR
         .get_file(&example_path)
         .ok_or_else(|| anyhow::anyhow!("Example file not found: {}", example_path))?;
@@ -340,9 +370,9 @@ fn init_from_example(
         .as_nanos();
     let example_temp_dir = temp_dir.join(format!("cargo-pvm-contract-{timestamp}"));
     fs::create_dir_all(&example_temp_dir).with_context(|| {
-        format!("Failed to create temporary directory for example: {example_temp_dir:?}",)
+        format!("Failed to create temporary directory for example: {example_temp_dir:?}")
     })?;
-    let temp_sol_path = example_temp_dir.join(example.sol_filename());
+    let temp_sol_path = example_temp_dir.join(example.filename.as_str());
     fs::write(&temp_sol_path, example_file.contents())
         .with_context(|| format!("Failed to write temporary .sol file: {:?}", temp_sol_path))?;
 
