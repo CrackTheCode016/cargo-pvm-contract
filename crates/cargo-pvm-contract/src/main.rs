@@ -28,18 +28,16 @@ enum Commands {
 
 #[derive(Parser, Debug, Default)]
 struct PvmContractArgs {
-    #[arg(long, value_enum, requires = "non_interactive")]
+    #[arg(long, value_enum)]
     init_type: Option<InitType>,
-    #[arg(long, requires = "non_interactive")]
-    example: Option<String>,
-    #[arg(long, value_enum, requires = "non_interactive")]
-    memory_model: Option<MemoryModel>,
-    #[arg(long, requires = "non_interactive")]
-    name: Option<String>,
-    #[arg(long, requires = "non_interactive")]
-    sol_file: Option<PathBuf>,
     #[arg(long)]
-    non_interactive: bool,
+    example: Option<String>,
+    #[arg(long, value_enum)]
+    memory_model: Option<MemoryModel>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    sol_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
@@ -143,69 +141,37 @@ fn main() -> Result<()> {
 }
 
 fn init_command(args: PvmContractArgs) -> Result<()> {
-    let builder_path = std::env::var("CARGO_PVM_CONTRACT_BUILDER_PATH")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
-
-    if let Some(path) = builder_path.as_deref()
-        && !path.exists()
-    {
-        anyhow::bail!("Builder path does not exist: {}", path.display());
-    }
-
-    if args.non_interactive {
-        init_command_non_interactive(args, builder_path.as_deref())
-    } else {
-        init_command_interactive(builder_path.as_deref())
-    }
-}
-
-fn init_command_interactive(builder_path: Option<&std::path::Path>) -> Result<()> {
-    // First, prompt for initialization type
-    let init_types = vec![InitType::SolidityFile, InitType::Example, InitType::Blank];
-    let init_type = Select::new("How do you want to initialize the project?", init_types)
-        .prompt()
-        .context("Failed to get initialization type")?;
+    // Get init_type from args or prompt
+    let init_type = match args.init_type {
+        Some(t) => t,
+        None => {
+            let init_types = vec![InitType::SolidityFile, InitType::Example, InitType::Blank];
+            Select::new("How do you want to initialize the project?", init_types)
+                .prompt()
+                .context("Failed to get initialization type")?
+        }
+    };
 
     match init_type {
         InitType::Blank => {
-            // Ask for name without prefill
-            let contract_name = Text::new("What is your contract name?")
-                .with_help_message("This will be the name of the project directory")
-                .prompt()
-                .context("Failed to get contract name")?;
-
-            if contract_name.is_empty() {
-                anyhow::bail!("Contract name cannot be empty");
-            }
-
+            let contract_name = prompt_name(args.name, None)?;
             check_dir_exists(&contract_name)?;
             debug!("Initializing blank contract: {contract_name}");
-            scaffold::init_blank_contract(&contract_name, builder_path)
+            scaffold::init_blank_contract(&contract_name)
         }
         InitType::Example => {
             let examples = load_examples()?;
-            let example = Select::new("Select an example:", examples)
-                .prompt()
-                .context("Failed to get example choice")?;
 
-            // Prompt for memory model
-            let memory_models = vec![MemoryModel::AllocWithAlloy, MemoryModel::NoAlloc];
-            let memory_model = Select::new("Which memory model do you want to use?", memory_models)
-                .prompt()
-                .context("Failed to get memory model choice")?;
+            // Get example from args or prompt
+            let example = match args.example {
+                Some(example_name) => find_example(&examples, &example_name)?,
+                None => Select::new("Select an example:", examples)
+                    .prompt()
+                    .context("Failed to get example choice")?,
+            };
 
-            // Ask for name with example name as default
-            let contract_name = Text::new("What is your contract name?")
-                .with_default(&example.name)
-                .with_help_message("This will be the name of the project directory")
-                .prompt()
-                .context("Failed to get contract name")?;
-
-            if contract_name.is_empty() {
-                anyhow::bail!("Contract name cannot be empty");
-            }
+            let memory_model = prompt_memory_model(args.memory_model)?;
+            let contract_name = prompt_name(args.name, Some(&example.name))?;
 
             check_dir_exists(&contract_name)?;
             debug!(
@@ -213,107 +179,24 @@ fn init_command_interactive(builder_path: Option<&std::path::Path>) -> Result<()
                 example.filename, memory_model
             );
 
-            init_from_example(&example, &contract_name, memory_model, builder_path)
+            init_from_example(&example, &contract_name, memory_model)
         }
         InitType::SolidityFile => {
-            // Prompt for .sol file path
-            let sol_file = Text::new("Enter path to your .sol file:")
-                .with_help_message("Path to a Solidity interface file")
-                .prompt()
-                .context("Failed to get .sol file path")?;
+            // Get sol_file from args or prompt
+            let sol_path = match args.sol_file {
+                Some(path) => path,
+                None => {
+                    let sol_file = Text::new("Enter path to your .sol file:")
+                        .with_help_message("Path to a Solidity interface file")
+                        .prompt()
+                        .context("Failed to get .sol file path")?;
 
-            if sol_file.is_empty() {
-                anyhow::bail!("Solidity file path cannot be empty");
-            }
-
-            // Verify file exists
-            let sol_path = PathBuf::from(&sol_file);
-            if !sol_path.exists() {
-                anyhow::bail!("Solidity file not found: {sol_file}");
-            }
-
-            // Extract default name from .sol filename
-            let default_name = sol_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("contract")
-                .to_string();
-
-            // Prompt for memory model
-            let memory_models = vec![MemoryModel::AllocWithAlloy, MemoryModel::NoAlloc];
-            let memory_model = Select::new("Which memory model do you want to use?", memory_models)
-                .prompt()
-                .context("Failed to get memory model choice")?;
-
-            // Ask for name with .sol filename as default
-            let contract_name = Text::new("What is your contract name?")
-                .with_default(&default_name)
-                .with_help_message("This will be the name of the project directory")
-                .prompt()
-                .context("Failed to get contract name")?;
-
-            if contract_name.is_empty() {
-                anyhow::bail!("Contract name cannot be empty");
-            }
-
-            check_dir_exists(&contract_name)?;
-            debug!(
-                "Initializing from Solidity file: {sol_file} with memory model: {:?}",
-                memory_model
-            );
-
-            let use_alloc = memory_model == MemoryModel::AllocWithAlloy;
-            scaffold::init_from_solidity_file(&sol_file, &contract_name, use_alloc, builder_path)
-        }
-    }
-}
-
-fn init_command_non_interactive(
-    args: PvmContractArgs,
-    builder_path: Option<&std::path::Path>,
-) -> Result<()> {
-    let init_type = args
-        .init_type
-        .ok_or_else(|| anyhow::anyhow!("--init-type is required with --non-interactive"))?;
-
-    match init_type {
-        InitType::Blank => {
-            let contract_name = args
-                .name
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("--name is required for blank initialization"))?;
-
-            check_dir_exists(&contract_name)?;
-            debug!("Initializing blank contract: {contract_name}");
-            scaffold::init_blank_contract(&contract_name, builder_path)
-        }
-        InitType::Example => {
-            let examples = load_examples()?;
-            let example_name = args.example.ok_or_else(|| {
-                anyhow::anyhow!("--example is required for example initialization")
-            })?;
-            let example = find_example(&examples, &example_name)?;
-            let memory_model = args.memory_model.ok_or_else(|| {
-                anyhow::anyhow!("--memory-model is required for example initialization")
-            })?;
-            let contract_name = args.name.unwrap_or_else(|| example.name.clone());
-
-            if contract_name.is_empty() {
-                anyhow::bail!("Contract name cannot be empty");
-            }
-
-            check_dir_exists(&contract_name)?;
-            debug!(
-                "Initializing from example: {} with memory model: {:?}",
-                example.filename, memory_model
-            );
-
-            init_from_example(&example, &contract_name, memory_model, builder_path)
-        }
-        InitType::SolidityFile => {
-            let sol_path = args.sol_file.ok_or_else(|| {
-                anyhow::anyhow!("--sol-file is required for Solidity initialization")
-            })?;
+                    if sol_file.is_empty() {
+                        anyhow::bail!("Solidity file path cannot be empty");
+                    }
+                    PathBuf::from(sol_file)
+                }
+            };
 
             if !sol_path.exists() {
                 anyhow::bail!("Solidity file not found: {}", sol_path.display());
@@ -324,15 +207,9 @@ fn init_command_non_interactive(
                 .and_then(|s| s.to_str())
                 .unwrap_or("contract")
                 .to_string();
-            let contract_name = args.name.unwrap_or(default_name);
 
-            if contract_name.is_empty() {
-                anyhow::bail!("Contract name cannot be empty");
-            }
-
-            let memory_model = args.memory_model.ok_or_else(|| {
-                anyhow::anyhow!("--memory-model is required for Solidity initialization")
-            })?;
+            let memory_model = prompt_memory_model(args.memory_model)?;
+            let contract_name = prompt_name(args.name, Some(&default_name))?;
 
             check_dir_exists(&contract_name)?;
             debug!(
@@ -345,16 +222,47 @@ fn init_command_non_interactive(
                 anyhow::anyhow!("Solidity file path is not valid UTF-8: {:?}", sol_path)
             })?;
             let use_alloc = memory_model == MemoryModel::AllocWithAlloy;
-            scaffold::init_from_solidity_file(sol_file, &contract_name, use_alloc, builder_path)
+            scaffold::init_from_solidity_file(sol_file, &contract_name, use_alloc)
         }
     }
+}
+
+fn prompt_memory_model(arg: Option<MemoryModel>) -> Result<MemoryModel> {
+    match arg {
+        Some(m) => Ok(m),
+        None => {
+            let memory_models = vec![MemoryModel::AllocWithAlloy, MemoryModel::NoAlloc];
+            Select::new("Which memory model do you want to use?", memory_models)
+                .prompt()
+                .context("Failed to get memory model choice")
+        }
+    }
+}
+
+fn prompt_name(arg: Option<String>, default: Option<&str>) -> Result<String> {
+    let contract_name = match arg {
+        Some(name) => name,
+        None => {
+            let mut prompt = Text::new("What is your contract name?")
+                .with_help_message("This will be the name of the project directory");
+            if let Some(d) = default {
+                prompt = prompt.with_default(d);
+            }
+            prompt.prompt().context("Failed to get contract name")?
+        }
+    };
+
+    if contract_name.is_empty() {
+        anyhow::bail!("Contract name cannot be empty");
+    }
+
+    Ok(contract_name)
 }
 
 fn init_from_example(
     example: &ExampleContract,
     contract_name: &str,
     memory_model: MemoryModel,
-    builder_path: Option<&std::path::Path>,
 ) -> Result<()> {
     // Get the embedded example .sol file
     let example_path = format!("examples/{}", example.filename);
@@ -383,7 +291,6 @@ fn init_from_example(
         temp_sol_path.to_str().unwrap(),
         contract_name,
         use_alloc,
-        builder_path,
     );
 
     // Clean up temp file
