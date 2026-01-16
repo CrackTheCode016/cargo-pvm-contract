@@ -34,5 +34,3 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Run tests
         run: cargo test -p cargo-pvm-contract
-        env:
-          CARGO_PVM_CONTRACT_TEST_TOOLCHAIN: nightly
