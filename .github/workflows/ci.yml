@@ -25,6 +25,9 @@ jobs:
           -o solc
           chmod +x solc
           sudo mv solc /usr/local/bin/solc
+      - name: Install nightly toolchain for scaffolds
+        run: |
+          rustup toolchain install nightly --component rust-src --profile minimal
       - name: Run formatting check
         run: cargo fmt --check
       - name: Run clippy
