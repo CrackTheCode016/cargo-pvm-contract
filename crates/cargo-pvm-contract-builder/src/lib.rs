@@ -193,13 +193,7 @@ fn build_elf(
     profile: &Profile,
     bins: &[String],
 ) -> Result<()> {
-    let immediate_abort = check_immediate_abort_support()?;
-
-    let rustflags = if immediate_abort {
-        "-Zunstable-options -Cpanic=immediate-abort"
-    } else {
-        ""
-    };
+    let rustflags = "-Zunstable-options -Cpanic=immediate-abort";
 
     let mut args = polkavm_linker::TargetJsonArgs::default();
     args.is_64_bit = true;
@@ -229,10 +223,6 @@ fn build_elf(
         .arg(&target_json)
         .arg("-Zbuild-std=core,alloc");
 
-    if !immediate_abort {
-        cmd.arg("-Zbuild-std-features=panic_immediate_abort");
-    }
-
     for bin in bins {
         cmd.arg("--bin").arg(bin);
     }
@@ -247,35 +237,6 @@ fn build_elf(
     }
 
     Ok(())
-}
-
-/// Check if rustc supports immediate abort (>= 1.92).
-fn check_immediate_abort_support() -> Result<bool> {
-    let output = Command::new("rustc")
-        .arg("--version")
-        .output()
-        .context("Failed to run rustc --version")?;
-
-    let version_str = String::from_utf8(output.stdout).context("Invalid rustc version output")?;
-
-    let version = version_str
-        .split_whitespace()
-        .nth(1)
-        .context("Unexpected rustc version format")?;
-
-    let mut parts = version.split('.');
-    let major: u32 = parts
-        .next()
-        .context("Missing major version")?
-        .parse()
-        .context("Invalid major version")?;
-    let minor: u32 = parts
-        .next()
-        .context("Missing minor version")?
-        .parse()
-        .context("Invalid minor version")?;
-
-    Ok(major > 1 || (major == 1 && minor >= 92))
 }
 
 /// Link an ELF binary to PolkaVM bytecode.

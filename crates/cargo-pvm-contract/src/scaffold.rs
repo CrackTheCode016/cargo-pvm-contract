@@ -1,13 +1,10 @@
 use anyhow::{Context, Result};
 use askama::Template;
+use convert_case::{Case, Casing};
 use serde::Deserialize;
 use std::io::Write;
 use std::{fs, path::PathBuf, process::Command};
 use tiny_keccak::{Hasher, Keccak};
-
-// ============================================================================
-// Askama Templates
-// ============================================================================
 
 #[derive(Template)]
 #[template(path = "scaffold/contract_alloc.rs.txt")]
@@ -32,6 +29,7 @@ const BUILDER_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[template(path = "scaffold/cargo_toml.txt")]
 struct CargoTomlTemplate<'a> {
     contract_name: &'a str,
+    bin_source: &'a str,
     use_alloc: bool,
     builder_version: &'a str,
     builder_path: Option<String>,
@@ -44,10 +42,6 @@ struct ContractBlankTemplate;
 #[derive(Template)]
 #[template(path = "scaffold/build.rs.txt")]
 struct BuildRsTemplate;
-
-// ============================================================================
-// Template Data Structures
-// ============================================================================
 
 struct AllocFunctionInfo {
     name: String,
@@ -83,10 +77,6 @@ struct NoAllocFunctionInfo {
 struct ParamDecode {
     decode_line: String,
 }
-
-// ============================================================================
-// Solc Output Parsing Structures
-// ============================================================================
 
 #[derive(Debug, Deserialize)]
 struct SolcOutput {
@@ -149,10 +139,6 @@ struct AbiOutput {
     type_name: String,
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
 /// Compute the keccak256 hash of a string
 fn keccak256(input: &str) -> [u8; 32] {
     let mut hasher = Keccak::v256();
@@ -198,40 +184,10 @@ fn format_bytes32_multiline(bytes: &[u8; 32]) -> String {
         .join(",\n    ")
 }
 
-fn to_pascal_case(s: &str) -> String {
-    s.split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect()
-}
-
-fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() && i > 0 {
-            result.push('_');
-        }
-        result.push(c.to_lowercase().next().unwrap());
-    }
-    result
-}
-
-fn to_screaming_snake_case(s: &str) -> String {
-    to_snake_case(s).to_uppercase()
-}
-
-// ============================================================================
-// Public API
-// ============================================================================
-
+/// Create a new blank contract project.
 pub fn init_blank_contract(contract_name: &str) -> Result<()> {
-    let target_dir = std::env::current_dir()?.join(contract_name);
+    let contract_name = contract_name.to_case(Case::Kebab);
+    let target_dir = std::env::current_dir()?.join(&contract_name);
     if target_dir.exists() {
         anyhow::bail!("Directory already exists: {target_dir:?}");
     }
@@ -239,25 +195,47 @@ pub fn init_blank_contract(contract_name: &str) -> Result<()> {
     fs::create_dir(&target_dir)
         .with_context(|| format!("Failed to create directory: {target_dir:?}"))?;
 
+    let (target_json_path, target_json_name) = resolve_target_json()?;
+    let target_json_dest = target_dir.join(target_json_name);
+    fs::copy(&target_json_path, &target_json_dest).with_context(|| {
+        format!(
+            "Failed to copy target JSON from {} to {}",
+            target_json_path.display(),
+            target_json_dest.display()
+        )
+    })?;
+
+    let target_json_name = target_json_dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Target JSON path is missing a file name"))?;
+
     let cargo_config_dir = target_dir.join(".cargo");
     fs::create_dir(&cargo_config_dir)?;
     fs::write(
         cargo_config_dir.join("config.toml"),
-        r#"[build]
-target = "riscv64imac-unknown-none-elf"
-"#,
+        format!(
+            "[build]\n target = \"{}\"\n\n[unstable]\n build-std = [\"core\", \"alloc\"]\n\n[env]\n RUSTC_BOOTSTRAP = \"1\"\n",
+            target_json_name
+        ),
     )?;
 
     fs::write(target_dir.join(".gitignore"), "/target\n*.polkavm\n")?;
-
+    fs::write(
+        target_dir.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"nightly\"\n",
+    )?;
     fs::create_dir(target_dir.join("src"))?;
     let lib_rs_content = generate_blank_contract()?;
-    fs::write(target_dir.join("src/lib.rs"), lib_rs_content)?;
+    fs::write(
+        target_dir.join(format!("src/{}.rs", contract_name)),
+        lib_rs_content,
+    )?;
 
     let build_rs_content = generate_build_rs()?;
     fs::write(target_dir.join("build.rs"), build_rs_content)?;
 
-    let cargo_toml_content = generate_cargo_toml(contract_name, false)?;
+    let cargo_toml_content = generate_cargo_toml(&contract_name, &contract_name, false)?;
     fs::write(target_dir.join("Cargo.toml"), cargo_toml_content)?;
 
     println!("Successfully initialized blank contract project: {target_dir:?}");
@@ -267,13 +245,13 @@ target = "riscv64imac-unknown-none-elf"
     Ok(())
 }
 
+/// Create a new contract project from a Solidity file.
 pub fn init_from_solidity_file(sol_file: &str, contract_name: &str, use_alloc: bool) -> Result<()> {
     let sol_path = PathBuf::from(sol_file);
     if !sol_path.exists() {
         anyhow::bail!("Solidity file not found: {sol_file}");
     }
 
-    // Get absolute path to .sol file
     let sol_abs_path = sol_path
         .canonicalize()
         .with_context(|| format!("Failed to get absolute path for {sol_file}"))?;
@@ -281,72 +259,128 @@ pub fn init_from_solidity_file(sol_file: &str, contract_name: &str, use_alloc: b
     let sol_file_name = sol_path
         .file_name()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
+        .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?
+        .to_string();
 
-    log::debug!("Extracting metadata from {sol_file}");
-    let (metadata, actual_contract_name) = extract_solc_metadata(&sol_abs_path, sol_file_name)?;
+    let sol_content = fs::read(&sol_abs_path)
+        .with_context(|| format!("Failed to read Solidity file: {sol_abs_path:?}"))?;
+
+    init_from_example_files_inner(&sol_content, &sol_file_name, None, contract_name, use_alloc)
+}
+
+pub fn init_from_example_files(
+    sol_contents: &[u8],
+    sol_file_name: &str,
+    rust_contents: &[u8],
+    contract_name: &str,
+    use_alloc: bool,
+) -> Result<()> {
+    init_from_example_files_inner(
+        sol_contents,
+        sol_file_name,
+        Some(rust_contents),
+        contract_name,
+        use_alloc,
+    )
+}
+
+fn init_from_example_files_inner(
+    sol_contents: &[u8],
+    sol_file_name: &str,
+    rust_contents: Option<&[u8]>,
+    contract_name: &str,
+    use_alloc: bool,
+) -> Result<()> {
+    let contract_name = contract_name.to_case(Case::Kebab);
+    let sol_file_name = sol_file_name.to_string();
+
+    log::debug!("Extracting metadata from {sol_file_name}");
+    let (metadata, actual_contract_name) =
+        extract_solc_metadata_from_bytes(sol_contents, &sol_file_name)?;
+    let actual_contract_kebab = actual_contract_name.to_case(Case::Kebab);
 
     // Create project directory
-    let target_dir = std::env::current_dir()?.join(contract_name);
+    let target_dir = std::env::current_dir()?.join(&contract_name);
     if target_dir.exists() {
         anyhow::bail!("Directory already exists: {target_dir:?}");
     }
     fs::create_dir(&target_dir)
         .with_context(|| format!("Failed to create directory: {target_dir:?}"))?;
 
+    let (target_json_path, target_json_name) = resolve_target_json()?;
+    let target_json_dest = target_dir.join(target_json_name);
+    fs::copy(&target_json_path, &target_json_dest).with_context(|| {
+        format!(
+            "Failed to copy target JSON from {} to {}",
+            target_json_path.display(),
+            target_json_dest.display()
+        )
+    })?;
+
+    let target_json_name = target_json_dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Target JSON path is missing a file name"))?;
+
     // Copy .sol file to project
-    let target_sol_path = target_dir.join(sol_file_name);
-    fs::copy(&sol_abs_path, &target_sol_path)
-        .with_context(|| format!("Failed to copy {sol_file} to {target_sol_path:?}"))?;
+    let target_sol_path = target_dir.join(&sol_file_name);
+    fs::write(&target_sol_path, sol_contents)
+        .with_context(|| format!("Failed to write {sol_file_name} to {target_sol_path:?}"))?;
 
     // Create .cargo directory and config
     let cargo_config_dir = target_dir.join(".cargo");
     fs::create_dir(&cargo_config_dir)?;
     fs::write(
         cargo_config_dir.join("config.toml"),
-        r#"[build]
-target = "riscv64imac-unknown-none-elf"
-"#,
+        format!(
+            "[build]\n target = \"{}\"\n\n[unstable]\n build-std = [\"core\", \"alloc\"]\n\n[env]\n RUSTC_BOOTSTRAP = \"1\"\n",
+            target_json_name
+        ),
     )?;
 
     // Create .gitignore
     fs::write(target_dir.join(".gitignore"), "/target\n*.polkavm\n")?;
-
-    // Generate src/lib.rs
+    fs::write(
+        target_dir.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"nightly\"\n",
+    )?;
+    // Generate src/{contract}.rs
     fs::create_dir(target_dir.join("src"))?;
 
-    let lib_rs_content = if use_alloc {
-        generate_rust_code_alloc(sol_file_name, &metadata, &actual_contract_name)?
+    let lib_rs_content = if let Some(contents) = rust_contents {
+        String::from_utf8(contents.to_vec()).context("Example Rust file is not valid UTF-8")?
+    } else if use_alloc {
+        generate_rust_code_alloc(&sol_file_name, &metadata, &actual_contract_name)?
     } else {
         generate_rust_code_no_alloc(&metadata, &actual_contract_name)?
     };
-    fs::write(target_dir.join("src/lib.rs"), lib_rs_content)?;
+    fs::write(
+        target_dir.join(format!("src/{}.rs", actual_contract_kebab)),
+        lib_rs_content,
+    )?;
 
     let build_rs_content = generate_build_rs()?;
     fs::write(target_dir.join("build.rs"), build_rs_content)?;
 
     // Create Cargo.toml
-    let cargo_toml_content = generate_cargo_toml(contract_name, use_alloc)?;
+    let cargo_toml_content =
+        generate_cargo_toml(&contract_name, &actual_contract_kebab, use_alloc)?;
     fs::write(target_dir.join("Cargo.toml"), cargo_toml_content)?;
 
-    println!("Successfully initialized contract project from {sol_file}: {target_dir:?}");
+    println!("Successfully initialized contract project from {sol_file_name}: {target_dir:?}");
     println!("\nNext steps:");
     println!("  cd {contract_name}");
     println!("  cargo build");
     Ok(())
 }
 
-// ============================================================================
-// Internal Functions
-// ============================================================================
-
-fn extract_solc_metadata(
-    sol_abs_path: &PathBuf,
+/// Internal helpers for template generation.
+fn extract_solc_metadata_from_bytes(
+    sol_contents: &[u8],
     sol_file_name: &str,
 ) -> Result<(ContractMetadata, String)> {
-    // Read the Solidity source code
-    let sol_content = fs::read_to_string(sol_abs_path)
-        .with_context(|| format!("Failed to read Solidity file: {sol_abs_path:?}"))?;
+    let sol_content =
+        String::from_utf8(sol_contents.to_vec()).context("Solidity file is not valid UTF-8")?;
 
     let solc_input = serde_json::json!({
         "language": "Solidity",
@@ -436,7 +470,7 @@ fn generate_rust_code_alloc(
     metadata: &ContractMetadata,
     contract_name: &str,
 ) -> Result<String> {
-    let contract_name_pascal = to_pascal_case(contract_name);
+    let contract_name_pascal = contract_name.to_case(Case::Pascal);
 
     let functions: Vec<AllocFunctionInfo> = metadata
         .output
@@ -445,7 +479,7 @@ fn generate_rust_code_alloc(
         .filter_map(|item| match item {
             AbiItem::Function { name, .. } => Some(AllocFunctionInfo {
                 name: name.clone(),
-                name_snake: to_snake_case(name),
+                name_snake: name.to_case(Case::Snake),
                 call_type: format!("{contract_name_pascal}::{name}Call"),
             }),
             _ => None,
@@ -471,7 +505,7 @@ fn generate_rust_code_no_alloc(metadata: &ContractMetadata, contract_name: &str)
         if let AbiItem::Function { name, inputs, .. } = item {
             let signature = build_function_signature(name, inputs);
             let selector = compute_selector(&signature);
-            let const_name = format!("{}_SELECTOR", to_screaming_snake_case(name));
+            let const_name = format!("{}_SELECTOR", name.to_case(Case::UpperSnake));
 
             selectors.push(SelectorConst {
                 const_name: const_name.clone(),
@@ -481,44 +515,18 @@ fn generate_rust_code_no_alloc(metadata: &ContractMetadata, contract_name: &str)
 
             // Generate decode params
             let mut params = Vec::new();
-            let mut offset = 4usize;
 
             for (idx, input) in inputs.iter().enumerate() {
                 let param_name = if input.name.is_empty() {
                     format!("param_{}", idx)
                 } else {
-                    to_snake_case(&input.name)
+                    input.name.to_case(Case::Snake)
                 };
 
-                let decode_line = match input.type_name.as_str() {
-                    "address" => {
-                        format!(
-                            "let {param_name} = decode_address(&call_data[{offset}..{}]);",
-                            offset + 32
-                        )
-                    }
-                    "uint256" | "uint128" | "uint64" | "uint32" | "uint16" | "uint8" => {
-                        format!(
-                            "let {param_name} = decode_u128(&call_data[{offset}..{}]);",
-                            offset + 32
-                        )
-                    }
-                    "bool" => {
-                        format!("let {param_name} = call_data[{}] != 0;", offset + 31)
-                    }
-                    "bytes32" => {
-                        format!(
-                            "let {param_name}: [u8; 32] = call_data[{offset}..{}].try_into().unwrap();",
-                            offset + 32
-                        )
-                    }
-                    _ => {
-                        format!("// TODO: decode {param_name} of type {}", input.type_name)
-                    }
-                };
+                let decode_line =
+                    format!("// TODO: decode {param_name} of type {}", input.type_name);
 
                 params.push(ParamDecode { decode_line });
-                offset += 32;
             }
 
             functions.push(NoAllocFunctionInfo {
@@ -540,7 +548,7 @@ fn generate_rust_code_no_alloc(metadata: &ContractMetadata, contract_name: &str)
                 let signature = build_function_signature(name, inputs);
                 let hash = keccak256(&signature);
                 Some(EventConst {
-                    const_name: format!("{}_EVENT_SIGNATURE", to_screaming_snake_case(name)),
+                    const_name: format!("{}_EVENT_SIGNATURE", name.to_case(Case::UpperSnake)),
                     bytes_hex: format_bytes32_multiline(&hash),
                     signature,
                 })
@@ -560,7 +568,7 @@ fn generate_rust_code_no_alloc(metadata: &ContractMetadata, contract_name: &str)
                 let signature = build_function_signature(name, inputs);
                 let selector = compute_selector(&signature);
                 Some(ErrorConst {
-                    const_name: format!("{}_ERROR", to_screaming_snake_case(name)),
+                    const_name: format!("{}_ERROR", name.to_case(Case::UpperSnake)),
                     bytes_hex: format_bytes_as_hex(&selector),
                     signature,
                 })
@@ -583,7 +591,22 @@ fn generate_rust_code_no_alloc(metadata: &ContractMetadata, contract_name: &str)
         .context("Failed to render no-alloc template")
 }
 
-fn generate_cargo_toml(contract_name: &str, use_alloc: bool) -> Result<String> {
+fn resolve_target_json() -> Result<(PathBuf, String)> {
+    let mut args = polkavm_linker::TargetJsonArgs::default();
+    args.is_64_bit = true;
+    let target_json = polkavm_linker::target_json_path(args)
+        .map_err(|e| anyhow::anyhow!("Failed to get target JSON: {e}"))?;
+
+    let target_name = target_json
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Target JSON path is missing a file name"))?
+        .to_string();
+
+    Ok((target_json, target_name))
+}
+
+fn generate_cargo_toml(contract_name: &str, bin_source: &str, use_alloc: bool) -> Result<String> {
     let builder_path = std::env::var("CARGO_PVM_CONTRACT_BUILDER_PATH")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -597,6 +620,7 @@ fn generate_cargo_toml(contract_name: &str, use_alloc: bool) -> Result<String> {
 
     let template = CargoTomlTemplate {
         contract_name,
+        bin_source,
         use_alloc,
         builder_version: BUILDER_VERSION,
         builder_path,

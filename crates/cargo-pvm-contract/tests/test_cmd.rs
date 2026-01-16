@@ -2,12 +2,6 @@ use assert_cmd::Command;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-fn cargo_path() -> PathBuf {
-    std::env::var("CARGO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("cargo"))
-}
-
 fn scaffold_example(temp_dir: &TempDir, name: &str, memory_model: &str) -> PathBuf {
     let builder_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cargo-pvm-contract-builder");
     let project_dir = temp_dir.path().join(name);
@@ -30,8 +24,11 @@ fn scaffold_example(temp_dir: &TempDir, name: &str, memory_model: &str) -> PathB
 }
 
 fn build_scaffolded_project(project_dir: &Path) {
-    let status = std::process::Command::new(cargo_path())
+    let status = std::process::Command::new("cargo")
         .current_dir(project_dir)
+        // Remove env vars that override rust-toolchain.toml
+        .env_remove("CARGO")
+        .env_remove("RUSTUP_TOOLCHAIN")
         .arg("build")
         .status()
         .expect("run cargo build");
