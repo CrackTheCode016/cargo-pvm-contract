@@ -10,18 +10,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust: ['1.91', '1.92']
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: 1.92
           components: rustfmt, clippy, rust-src
-          targets: riscv64imac-unknown-none-elf
       - name: Install solc
         run: |
           SOLC_VERSION=0.8.26

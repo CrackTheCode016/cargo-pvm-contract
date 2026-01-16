@@ -6,7 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/paritytech/cargo-pvm-contract"
@@ -22,5 +22,6 @@ polkavm-linker = "0.30.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tiny-keccak = { version = "2.0", features = ["keccak"] }
+convert_case = "0.6"
 toml_edit = "0.22"
 inquire = "0.7"

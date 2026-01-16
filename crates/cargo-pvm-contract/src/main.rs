@@ -3,10 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use include_dir::{Dir, include_dir};
 use inquire::{Select, Text};
 use log::debug;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
 mod scaffold;
 
@@ -77,24 +74,58 @@ impl std::fmt::Display for MemoryModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExampleContract {
     name: String,
-    filename: String,
+    folder: String,
+    sol_filename: String,
+    rust_no_alloc: String,
+    rust_with_alloc: String,
 }
 
 impl ExampleContract {
-    fn from_path(path: &Path) -> Option<Self> {
-        if path.extension().and_then(|ext| ext.to_str()) != Some("sol") {
-            return None;
-        }
+    fn from_dir(dir: &Dir) -> Option<Self> {
+        let sol_file = dir
+            .files()
+            .find(|file| file.path().extension().and_then(|ext| ext.to_str()) == Some("sol"))?;
+        let sol_filename = sol_file.path().file_name()?.to_str()?.to_string();
+        let name = sol_file.path().file_stem()?.to_str()?.to_string();
 
-        let filename = path.file_name()?.to_str()?.to_string();
-        let name = path.file_stem()?.to_str()?.to_string();
-        Some(Self { name, filename })
+        let rust_no_alloc = dir
+            .files()
+            .find(|file| {
+                file.path()
+                    .file_name()
+                    .and_then(|filename| filename.to_str())
+                    .is_some_and(|filename| filename.ends_with("_no_alloc.rs"))
+            })?
+            .path()
+            .file_name()?
+            .to_str()?
+            .to_string();
+        let rust_with_alloc = dir
+            .files()
+            .find(|file| {
+                file.path()
+                    .file_name()
+                    .and_then(|filename| filename.to_str())
+                    .is_some_and(|filename| filename.ends_with("_with_alloc.rs"))
+            })?
+            .path()
+            .file_name()?
+            .to_str()?
+            .to_string();
+
+        Some(Self {
+            name,
+            folder: dir.path().to_str()?.to_string(),
+            sol_filename,
+            rust_no_alloc,
+            rust_with_alloc,
+        })
     }
 
     fn matches(&self, query: &str) -> bool {
         let query = query.trim().to_ascii_lowercase();
         let name = self.name.to_ascii_lowercase();
-        let filename = self.filename.to_ascii_lowercase();
+        let filename = self.sol_filename.to_ascii_lowercase();
         query == name || query == filename
     }
 }
@@ -110,8 +141,8 @@ fn load_examples() -> Result<Vec<ExampleContract>> {
         .get_dir("examples")
         .ok_or_else(|| anyhow::anyhow!("Examples directory not found in templates"))?;
     let mut examples: Vec<ExampleContract> = examples_dir
-        .files()
-        .filter_map(|file| ExampleContract::from_path(file.path()))
+        .dirs()
+        .filter_map(ExampleContract::from_dir)
         .collect();
 
     examples.sort_by(|left, right| left.name.cmp(&right.name));
@@ -176,7 +207,7 @@ fn init_command(args: PvmContractArgs) -> Result<()> {
             check_dir_exists(&contract_name)?;
             debug!(
                 "Initializing from example: {} with memory model: {:?}",
-                example.filename, memory_model
+                example.sol_filename, memory_model
             );
 
             init_from_example(&example, &contract_name, memory_model)
@@ -264,39 +295,30 @@ fn init_from_example(
     contract_name: &str,
     memory_model: MemoryModel,
 ) -> Result<()> {
-    // Get the embedded example .sol file
-    let example_path = format!("examples/{}", example.filename);
-    let example_file = TEMPLATES_DIR
-        .get_file(&example_path)
-        .ok_or_else(|| anyhow::anyhow!("Example file not found: {}", example_path))?;
-
-    // Write to a temporary file
-    let temp_dir = std::env::temp_dir();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("Failed to read system time")?
-        .as_nanos();
-    let example_temp_dir = temp_dir.join(format!("cargo-pvm-contract-{timestamp}"));
-    fs::create_dir_all(&example_temp_dir).with_context(|| {
-        format!("Failed to create temporary directory for example: {example_temp_dir:?}")
-    })?;
-    let temp_sol_path = example_temp_dir.join(example.filename.as_str());
-    fs::write(&temp_sol_path, example_file.contents())
-        .with_context(|| format!("Failed to write temporary .sol file: {:?}", temp_sol_path))?;
+    let sol_path = format!("{}/{}", example.folder, example.sol_filename);
+    let sol_file = TEMPLATES_DIR
+        .get_file(&sol_path)
+        .ok_or_else(|| anyhow::anyhow!("Example file not found: {sol_path}"))?;
 
     let use_alloc = memory_model == MemoryModel::AllocWithAlloy;
+    let rust_example_name = if use_alloc {
+        example.rust_with_alloc.as_str()
+    } else {
+        example.rust_no_alloc.as_str()
+    };
 
-    // Use scaffold to initialize from the temp file
-    let result = scaffold::init_from_solidity_file(
-        temp_sol_path.to_str().unwrap(),
+    let rust_path = format!("{}/{}", example.folder, rust_example_name);
+    let rust_file = TEMPLATES_DIR
+        .get_file(&rust_path)
+        .ok_or_else(|| anyhow::anyhow!("Example file not found: {rust_path}"))?;
+
+    scaffold::init_from_example_files(
+        sol_file.contents(),
+        &example.sol_filename,
+        rust_file.contents(),
         contract_name,
         use_alloc,
-    );
-
-    // Clean up temp file
-    let _ = fs::remove_dir_all(&example_temp_dir);
-
-    result
+    )
 }
 
 fn check_dir_exists(contract_name: &str) -> Result<()> {

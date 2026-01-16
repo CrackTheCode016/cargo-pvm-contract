@@ -27,6 +27,8 @@ serde_json = { workspace = true }
 inquire = { workspace = true }
 tiny-keccak = { workspace = true }
 askama = { workspace = true }
+polkavm-linker = { workspace = true }
+convert_case = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"

@@ -1,28 +1,15 @@
 #![no_main]
 #![no_std]
 
-use pallet_revive_uapi::{HostFn, HostFnImpl as api, ReturnFlags, StorageFlags};
+use pallet_revive_uapi::{HostFn, HostFnImpl as api, ReturnFlags};
 
 // ============================================================================
-// {{ contract_name_upper }} CONTRACT - Generated from Solidity ABI
+// FIBONACCI CONTRACT - Generated from Solidity ABI
 // ============================================================================
 
 // Function selectors
-{% for sel in selectors %}
-const {{ sel.const_name }}: [u8; 4] = [{{ sel.bytes_hex }}]; // {{ sel.signature }}
-{% endfor %}
 
-// Event signatures
-{% for evt in events %}
-const {{ evt.const_name }}: [u8; 32] = [
-    {{ evt.bytes_hex }}
-]; // {{ evt.signature }}
-
-{% endfor %}
-// Error selectors
-{% for err in errors %}
-const {{ err.const_name }}: [u8; 4] = [{{ err.bytes_hex }}]; // {{ err.signature }}
-{% endfor %}
+const FIBONACCI_SELECTOR: [u8; 4] = [0xe4, 0x44, 0xa7, 0x09]; // fibonacci(uint32)
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -59,19 +46,33 @@ pub extern "C" fn call() {
     let selector: [u8; 4] = call_data[0..4].try_into().unwrap();
 
     match selector {
-{% for func in functions %}
-        {{ func.selector_const }} => {
-            if call_data_len < {{ func.min_call_data_len }} {
-                panic!("Invalid {{ func.name }} call data");
+        FIBONACCI_SELECTOR => {
+            if call_data_len < 36 {
+                panic!("Invalid fibonacci call data");
             }
-{% for param in func.params %}
-            {{ param.decode_line }}
-{% endfor %}
 
-            // TODO: Implement {{ func.name }} logic
-            todo!()
+            let mut input = [0u8; 4];
+            api::call_data_copy(&mut input, 32);
+
+            let n = u32::from_be_bytes(input);
+            let result = _fibonacci(n);
+            let output = result.to_be_bytes();
+
+            let mut response = [0u8; 32];
+            response[28..].copy_from_slice(&output);
+            api::return_value(ReturnFlags::empty(), &response);
         }
-{% endfor %}
+
         _ => panic!("Unknown function selector"),
+    }
+}
+
+fn _fibonacci(n: u32) -> u32 {
+    if n == 0 {
+        0
+    } else if n == 1 {
+        1
+    } else {
+        _fibonacci(n - 1) + _fibonacci(n - 2)
     }
 }
