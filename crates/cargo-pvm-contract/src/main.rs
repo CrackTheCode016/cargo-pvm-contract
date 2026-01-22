@@ -185,10 +185,12 @@ fn init_command(args: PvmContractArgs) -> Result<()> {
 
     match init_type {
         InitType::Blank => {
+            let memory_model = prompt_memory_model(args.memory_model)?;
             let contract_name = prompt_name(args.name, None)?;
             check_dir_exists(&contract_name)?;
-            debug!("Initializing blank contract: {contract_name}");
-            scaffold::init_blank_contract(&contract_name)
+            let use_alloc = memory_model == MemoryModel::AllocWithAlloy;
+            debug!("Initializing blank contract: {contract_name} with alloc: {use_alloc}");
+            scaffold::init_blank_contract(&contract_name, use_alloc)
         }
         InitType::Example => {
             let examples = load_examples()?;

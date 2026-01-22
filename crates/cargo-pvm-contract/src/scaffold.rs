@@ -40,6 +40,10 @@ struct CargoTomlTemplate<'a> {
 struct ContractBlankTemplate;
 
 #[derive(Template)]
+#[template(path = "scaffold/contract_blank_alloc.rs.txt")]
+struct ContractBlankAllocTemplate;
+
+#[derive(Template)]
 #[template(path = "scaffold/build.rs.txt")]
 struct BuildRsTemplate;
 
@@ -185,7 +189,7 @@ fn format_bytes32_multiline(bytes: &[u8; 32]) -> String {
 }
 
 /// Create a new blank contract project.
-pub fn init_blank_contract(contract_name: &str) -> Result<()> {
+pub fn init_blank_contract(contract_name: &str, use_alloc: bool) -> Result<()> {
     let contract_name = contract_name.to_case(Case::Kebab);
     let target_dir = std::env::current_dir()?.join(&contract_name);
     if target_dir.exists() {
@@ -226,7 +230,7 @@ pub fn init_blank_contract(contract_name: &str) -> Result<()> {
         "[toolchain]\nchannel = \"nightly\"\n",
     )?;
     fs::create_dir(target_dir.join("src"))?;
-    let lib_rs_content = generate_blank_contract()?;
+    let lib_rs_content = generate_blank_contract(use_alloc)?;
     fs::write(
         target_dir.join(format!("src/{}.rs", contract_name)),
         lib_rs_content,
@@ -235,7 +239,7 @@ pub fn init_blank_contract(contract_name: &str) -> Result<()> {
     let build_rs_content = generate_build_rs()?;
     fs::write(target_dir.join("build.rs"), build_rs_content)?;
 
-    let cargo_toml_content = generate_cargo_toml(&contract_name, &contract_name, false)?;
+    let cargo_toml_content = generate_cargo_toml(&contract_name, &contract_name, use_alloc)?;
     fs::write(target_dir.join("Cargo.toml"), cargo_toml_content)?;
 
     println!("Successfully initialized blank contract project: {target_dir:?}");
@@ -453,10 +457,16 @@ fn extract_solc_metadata_from_bytes(
     Ok((metadata, contract_name.clone()))
 }
 
-fn generate_blank_contract() -> Result<String> {
-    ContractBlankTemplate
-        .render()
-        .context("Failed to render blank contract template")
+fn generate_blank_contract(use_alloc: bool) -> Result<String> {
+    if use_alloc {
+        ContractBlankAllocTemplate
+            .render()
+            .context("Failed to render blank alloc contract template")
+    } else {
+        ContractBlankTemplate
+            .render()
+            .context("Failed to render blank contract template")
+    }
 }
 
 fn generate_build_rs() -> Result<String> {
