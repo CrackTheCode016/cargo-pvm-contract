@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @title {{ contract_name }}
+/// @notice Blank contract interface
+interface {{ contract_name }} {
+    // Add function signatures here
+}
