@@ -239,9 +239,11 @@ pub fn init_blank_contract(contract_name: &str, use_alloc: bool) -> Result<()> {
     // Write a minimal Solidity interface companion file using the template
     let contract_name_pascal = contract_name.to_case(Case::Pascal);
     let sol_file_name = format!("{}.sol", contract_name_pascal);
-    let sol_content = BlankSolTemplate { contract_name: &contract_name_pascal }
-        .render()
-        .context("Failed to render blank Solidity interface template")?;
+    let sol_content = BlankSolTemplate {
+        contract_name: &contract_name_pascal,
+    }
+    .render()
+    .context("Failed to render blank Solidity interface template")?;
     fs::write(target_dir.join(&sol_file_name), sol_content)?;
 
     let lib_rs_content = generate_blank_contract(use_alloc)?;
